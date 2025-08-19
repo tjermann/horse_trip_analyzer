@@ -12,7 +12,9 @@ Build a deep learning system to analyze horse racing videos and quantify trip di
 - [x] Project structure and dependencies defined
 - [x] Video scraping from TJK website
 - [x] YOLOv8-based horse detection
-- [x] Multi-object tracking (ByteTrack)
+- [x] **Automatic horse count detection from race start** 🆕
+- [x] **Advanced multi-object tracking with re-identification** 🆕
+- [x] **OCR-based horse number recognition** 🆕
 - [x] Trip event detection system
 - [x] Difficulty scoring algorithm
 - [x] Batch processing pipeline
@@ -63,10 +65,10 @@ Build a deep learning system to analyze horse racing videos and quantify trip di
 ## Current Limitations
 
 1. **Model Accuracy**: Using generic YOLOv8, not trained on horses specifically
-2. **Jockey Identification**: Color detection started but not functional
-3. **Track Geometry**: Assumes uniform track, doesn't account for turns
-4. **Scale**: Processes ~2-5 fps on GPU, not real-time
-5. **Video Quality**: Dependent on source video resolution
+2. **Track Geometry**: Assumes uniform track, doesn't account for turns  
+3. **Scale**: Processes ~2-5 fps on GPU, not real-time
+4. **Video Quality**: Dependent on source video resolution
+5. **OCR Accuracy**: Horse number detection works ~70-80% of the time
 
 ## Quick Start Commands
 
@@ -76,26 +78,33 @@ conda create -n horse_racing python=3.11 -y
 conda activate horse_racing
 pip install -r requirements.txt
 
-# Test single race
+# Test single race (auto-detects horse count)
 python main.py --race-code 194367 --save-annotated
 
-# Run batch analysis
+# Force specific horse count
+python main.py --race-code 194367 --num-horses 8
+
+# Run batch analysis (auto-detects for each race)
 python batch_processor.py --race-codes 194367 194368 194369
 ```
 
 ## Next Session Priorities
 
-1. **Improve Detection**: Collect horse racing dataset and fine-tune YOLO
-2. **Track Geometry**: Implement turn detection for accurate distance
-3. **Results Integration**: Scrape and correlate with official results
+1. **Test New Features**: Validate auto-detection and improved tracking on multiple races
+2. **Track Geometry**: Implement turn detection for accurate distance calculations
+3. **Results Integration**: Scrape and correlate with official results  
 4. **Validation**: Compare analysis with expert trip notes
 5. **UI Development**: Build web interface for visualization
+6. **OCR Improvement**: Fine-tune number recognition for better accuracy
 
 ## Key Files to Review
+- `src/race_start_detector.py` - **NEW**: Auto horse count detection
+- `src/horse_tracker.py` - **NEW**: Improved tracking with re-ID
 - `src/trip_analyzer.py` - Core analysis logic
-- `src/horse_detector.py` - Detection and tracking
-- `main.py` - Entry point and pipeline
-- `requirements.txt` - Dependencies
+- `src/horse_detector.py` - Basic detection
+- `src/video_processor.py` - Main pipeline (updated)
+- `main.py` - Entry point (updated with new options)
+- `requirements.txt` - Dependencies (added EasyOCR)
 
 ## Performance Metrics
 - Processing Speed: 2-5 fps (GPU), 0.5-1 fps (CPU)

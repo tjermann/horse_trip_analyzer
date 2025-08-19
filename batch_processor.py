@@ -35,7 +35,7 @@ def process_single_race(race_code: str, output_dir: str, download: bool = True) 
             logger.error(f"Failed to get video for race {race_code}")
             return None
         
-        processor = VideoProcessor(output_dir=output_dir, save_annotated=False)
+        processor = VideoProcessor(output_dir=output_dir, save_annotated=False, auto_detect_horses=True)
         results = processor.process_video(video_path, race_code)
         
         return results

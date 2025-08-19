@@ -15,7 +15,9 @@ A deep learning computer vision system for analyzing horse racing trips at scale
 
 ### Technical Features
 - YOLOv8-based horse detection and tracking
-- Multi-object tracking across frames
+- **Automatic horse count detection** from race start screens
+- **Advanced OCR-based horse number recognition** from saddle cloths
+- **Improved multi-object tracking** with re-identification features
 - Automated video scraping from TJK website
 - Batch processing for multiple races
 - Detailed trip difficulty scoring (0-100 scale)
@@ -39,8 +41,14 @@ mkdir -p data/{videos,processed} logs models
 ### Single Race Analysis
 
 ```bash
-# Download and analyze a race by code
+# Auto-detect horse count and analyze (recommended)
 python main.py --race-code 194367 --save-annotated
+
+# Specify horse count manually
+python main.py --race-code 194367 --num-horses 8
+
+# Disable auto-detection (uses default 8 horses)
+python main.py --race-code 194367 --no-auto-detect
 
 # Analyze existing video
 python main.py --video-path data/videos/race_194367.mp4
@@ -49,7 +57,7 @@ python main.py --video-path data/videos/race_194367.mp4
 ### Batch Processing
 
 ```bash
-# Process multiple races
+# Process multiple races (auto-detects horse count for each)
 python batch_processor.py --race-codes 194367 194368 194369
 
 # Process from file
@@ -82,13 +90,15 @@ The system calculates a 0-100 difficulty score based on:
 ```
 horse_trip_analyzer/
 ├── src/
-│   ├── video_scraper.py     # TJK website video downloading
-│   ├── horse_detector.py    # YOLOv8 detection & tracking
-│   ├── trip_analyzer.py     # Trip event detection & scoring
-│   └── video_processor.py   # Main processing pipeline
-├── main.py                   # Single race CLI
-├── batch_processor.py        # Batch processing CLI
-└── requirements.txt          # Dependencies
+│   ├── video_scraper.py        # TJK website video downloading
+│   ├── horse_detector.py       # YOLOv8 detection & basic tracking
+│   ├── horse_tracker.py        # Advanced tracking with re-identification
+│   ├── race_start_detector.py  # Auto-detect horse count from race start
+│   ├── trip_analyzer.py        # Trip event detection & scoring
+│   └── video_processor.py      # Main processing pipeline
+├── main.py                      # Single race CLI
+├── batch_processor.py           # Batch processing CLI
+└── requirements.txt             # Dependencies
 ```
 
 ## Key Metrics Explained
@@ -104,13 +114,20 @@ horse_trip_analyzer/
 - Memory usage: ~4GB for 1080p video
 - Recommended: CUDA-capable GPU for faster processing
 
+## Recent Improvements
+
+- [x] **Automatic horse count detection** from race start screens
+- [x] **OCR-based horse number recognition** from saddle cloths  
+- [x] **Improved tracking** with re-identification to maintain consistent horse IDs
+- [x] **Better object permanence** handling temporary occlusions
+
 ## Future Enhancements
 
 - [ ] Fine-tune YOLO model specifically for horses
-- [ ] Jockey silk color identification
-- [ ] Turn radius analysis
-- [ ] Stride length estimation
-- [ ] Integration with race results data
+- [ ] Enhanced jockey silk color identification
+- [ ] Turn radius analysis for more accurate distance calculations
+- [ ] Stride length estimation and biomechanics
+- [ ] Integration with race results data for validation
 - [ ] Real-time processing capability
 
 ## Troubleshooting

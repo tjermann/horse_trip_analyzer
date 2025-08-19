@@ -24,6 +24,10 @@ def main():
                        help="Output directory for processed files")
     parser.add_argument("--save-annotated", action="store_true", 
                        help="Save annotated video with detections")
+    parser.add_argument("--num-horses", type=int, default=None,
+                       help="Expected number of horses in the race (auto-detect if not specified)")
+    parser.add_argument("--no-auto-detect", action="store_true",
+                       help="Disable automatic horse count detection")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
     
     args = parser.parse_args()
@@ -58,7 +62,9 @@ def main():
     logger.info("Processing video...")
     processor = VideoProcessor(
         output_dir=args.output_dir,
-        save_annotated=args.save_annotated
+        save_annotated=args.save_annotated,
+        expected_horses=args.num_horses,
+        auto_detect_horses=not args.no_auto_detect
     )
     
     results = processor.process_video(video_path, race_code)

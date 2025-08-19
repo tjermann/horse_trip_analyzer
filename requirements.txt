@@ -11,6 +11,7 @@ seaborn>=0.12.0
 ultralytics>=8.0.0  # YOLOv8 for horse detection
 supervision>=0.16.0  # Video annotation and tracking
 lap>=0.4.0  # Linear assignment for tracking
+easyocr>=1.7.0  # OCR for reading horse numbers
 
 # Video Processing
 moviepy>=1.0.3

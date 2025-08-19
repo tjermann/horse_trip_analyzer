@@ -142,13 +142,18 @@ class TripAnalyzer:
             pos.position_in_field = i + 1
     
     def _detect_events(self, frame_num: int, positions: List[HorsePosition]):
+        # Only check events every 15 frames (every 0.5 seconds) to reduce noise
+        if frame_num % 15 != 0:
+            return
+            
         for pos in positions:
             history = self.horse_histories[pos.track_id]
             
-            if len(history) < 10:
+            # Need more history for reliable detection
+            if len(history) < 30:
                 continue
             
-            recent_positions = history[-10:]
+            recent_positions = history[-30:]  # Look at last 30 positions
             
             if self._is_boxed_in(pos, positions):
                 self._add_event(pos.track_id, frame_num, TripEvent.BOXED_IN)
@@ -199,38 +204,56 @@ class TripAnalyzer:
         return avg_lateral > 0.7 or avg_lateral < 0.3
     
     def _detect_bump(self, recent_positions: List[HorsePosition]) -> bool:
-        if len(recent_positions) < 3:
+        if len(recent_positions) < 10:
             return False
         
-        accelerations = [p.acceleration for p in recent_positions[-3:]]
+        # More strict thresholds for bump detection
+        accelerations = [p.acceleration for p in recent_positions[-5:]]
         
-        if any(abs(a) > 50 for a in accelerations):
+        # Look for significant acceleration spikes
+        if any(abs(a) > 100 for a in accelerations):
             lateral_changes = []
             for i in range(1, len(recent_positions)):
                 lateral_change = abs(recent_positions[i].lateral_position - 
                                    recent_positions[i-1].lateral_position)
                 lateral_changes.append(lateral_change)
             
-            return max(lateral_changes) > 0.1
+            # Require larger lateral movement to indicate bump
+            return max(lateral_changes) > 0.15
         
         return False
     
     def _detect_steadied(self, recent_positions: List[HorsePosition]) -> bool:
-        if len(recent_positions) < 5:
+        if len(recent_positions) < 15:
             return False
         
-        speeds = [p.speed for p in recent_positions]
+        speeds = [p.speed for p in recent_positions if p.speed > 0]
         
-        if len(speeds) >= 5:
-            smoothed = savgol_filter(speeds, 5, 2)
+        if len(speeds) >= 10:
+            smoothed = savgol_filter(speeds, min(9, len(speeds)), 2)
             deceleration = np.diff(smoothed)
             
-            return any(d < -10 for d in deceleration)
+            # More significant deceleration required
+            return any(d < -25 for d in deceleration)
         
         return False
     
     def _add_event(self, track_id: int, frame_num: int, event_type: TripEvent):
         if track_id not in self.horse_histories:
+            return
+        
+        if not hasattr(self, 'events'):
+            self.events = {}
+        
+        if track_id not in self.events:
+            self.events[track_id] = []
+        
+        # Check for duplicate events within the last 30 frames (1 second)
+        recent_events = [e for e in self.events[track_id] 
+                        if e["frame"] > frame_num - 30]
+        
+        # Don't add if same event type occurred recently
+        if any(e["type"] == event_type.value for e in recent_events):
             return
         
         event = {
@@ -239,12 +262,6 @@ class TripAnalyzer:
             "type": event_type.value,
             "severity": self._calculate_severity(event_type)
         }
-        
-        if not hasattr(self, 'events'):
-            self.events = {}
-        
-        if track_id not in self.events:
-            self.events[track_id] = []
         
         self.events[track_id].append(event)
     
@@ -290,17 +307,26 @@ class TripAnalyzer:
         return analyses
     
     def _calculate_ground_loss(self, history: List[HorsePosition]) -> float:
-        if len(history) < 2:
+        if len(history) < 10:
             return 0.0
         
-        total_distance = history[-1].distance_traveled
+        # Calculate distance more carefully
+        total_distance = 0
+        for i in range(1, len(history)):
+            frame_distance = distance.euclidean(history[i].center, history[i-1].center)
+            # Cap unrealistic frame-to-frame distances (likely tracking errors)
+            if frame_distance < 200:  # Max reasonable movement per frame
+                total_distance += frame_distance
         
-        start_pos = history[0].center
-        end_pos = history[-1].center
-        direct_distance = distance.euclidean(start_pos, end_pos)
+        # Approximate race distance based on frame count and typical speeds
+        race_frames = len(history)
+        estimated_race_distance = race_frames * 3  # Rough estimate
         
-        if direct_distance > 0:
-            return (total_distance - direct_distance) / direct_distance
+        if estimated_race_distance > 0:
+            ground_loss_ratio = (total_distance - estimated_race_distance) / estimated_race_distance
+            # Cap ground loss at reasonable values
+            return max(0, min(ground_loss_ratio, 0.5))  # Max 50% ground loss
+        
         return 0.0
     
     def _determine_pace_scenario(self, history: List[HorsePosition]) -> str:

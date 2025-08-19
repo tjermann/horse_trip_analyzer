@@ -7,20 +7,29 @@ import json
 from loguru import logger
 
 from .horse_detector import HorseDetector, JockeyColorIdentifier
+from .horse_tracker import ImprovedHorseTracker
 from .trip_analyzer import TripAnalyzer, TripAnalysis
+from .race_start_detector import detect_race_horses
 
 
 class VideoProcessor:
     def __init__(self, 
                  output_dir: str = "data/processed",
-                 save_annotated: bool = True):
+                 save_annotated: bool = True,
+                 expected_horses: Optional[int] = None,
+                 auto_detect_horses: bool = True):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.save_annotated = save_annotated
+        self.expected_horses = expected_horses
+        self.auto_detect_horses = auto_detect_horses
         
         self.detector = HorseDetector()
         self.jockey_identifier = JockeyColorIdentifier()
         self.analyzer = TripAnalyzer()
+        
+        # Tracker will be initialized after horse count detection
+        self.tracker = None
         
     def process_video(self, video_path: str, race_code: Optional[str] = None) -> Dict:
         video_path = Path(video_path)
@@ -29,6 +38,19 @@ class VideoProcessor:
             return None
         
         logger.info(f"Processing video: {video_path}")
+        
+        # Auto-detect number of horses if not specified
+        if self.auto_detect_horses and self.expected_horses is None:
+            logger.info("Auto-detecting number of horses from race start...")
+            horse_count, horse_numbers = detect_race_horses(str(video_path))
+            self.expected_horses = horse_count
+            logger.info(f"Detected {horse_count} horses: {sorted(horse_numbers)}")
+        elif self.expected_horses is None:
+            self.expected_horses = 8
+            logger.info("Using default of 8 horses")
+        
+        # Initialize tracker with detected horse count
+        self.tracker = ImprovedHorseTracker(expected_horses=self.expected_horses)
         
         cap = cv2.VideoCapture(str(video_path))
         
@@ -54,14 +76,11 @@ class VideoProcessor:
             
             detections = self.detector.detect_horses(frame)
             
-            detections = self.detector.track_horses(detections, (height, width))
+            # Use improved tracker instead of basic tracking
+            tracked_horses = self.tracker.update(detections, frame)
             
-            for det in detections:
-                if det.track_id is not None:
-                    jersey = self.jockey_identifier.identify_jersey(frame, det.bbox)
-                    if jersey:
-                        det.jersey_number = jersey
-            
+            # The tracker has already updated track_ids in detections
+            # Now update the analyzer with properly tracked horses
             self.analyzer.update_frame(frame_num, detections, (height, width))
             
             if self.save_annotated:
@@ -83,6 +102,22 @@ class VideoProcessor:
         
         trip_analyses = self.analyzer.analyze_trips()
         
+        # Get tracking summary
+        tracking_summary = self.tracker.get_summary()
+        
+        # Filter analyses to only include actual horses and limit to expected count
+        # Sort by total frames tracked (most reliable tracking first)
+        sorted_analyses = sorted(trip_analyses, 
+                               key=lambda a: len(self.analyzer.horse_histories.get(a.track_id, [])), 
+                               reverse=True)
+        
+        valid_analyses = []
+        for analysis in sorted_analyses:
+            if len(valid_analyses) >= self.expected_horses:
+                break
+            if analysis.track_id <= 20:  # Reasonable horse number
+                valid_analyses.append(analysis)
+        
         results = {
             "video_path": str(video_path),
             "race_code": race_code,
@@ -92,8 +127,9 @@ class VideoProcessor:
                 "duration": total_frames / fps,
                 "resolution": f"{width}x{height}"
             },
-            "num_horses_detected": len(trip_analyses),
-            "trip_analyses": [analysis.to_dict() for analysis in trip_analyses]
+            "num_horses_detected": len(valid_analyses),
+            "tracking_summary": tracking_summary,
+            "trip_analyses": [analysis.to_dict() for analysis in valid_analyses]
         }
         
         results_path = self.output_dir / f"{video_path.stem}_analysis.json"
@@ -170,7 +206,8 @@ class VideoProcessor:
         
         report = "\n".join(report_lines)
         
-        report_path = self.output_dir / f"race_report_{analysis_results.get('race_code', 'unknown')}.txt"
+        race_code = analysis_results.get('race_code') or 'unknown'
+        report_path = self.output_dir / f"race_report_{race_code}.txt"
         with open(report_path, 'w') as f:
             f.write(report)
         

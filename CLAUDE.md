@@ -14,13 +14,27 @@ Quantify trip difficulty (0-100 scale) by detecting and analyzing various racing
 - Downloads videos with yt-dlp or direct requests
 - Extracts race metadata (horses, jockeys, etc.)
 
-### 2. Horse Detector (`src/horse_detector.py`)
+### 2. Race Start Detector (`src/race_start_detector.py`) **NEW**
+- **Automatically detects number of horses** from race start screens
+- Multi-region OCR analysis (top, bottom, sides, center)
+- Advanced preprocessing (binary, adaptive threshold, edge enhancement)
+- Validates against reasonable horse number ranges (1-20)
+- Analyzes first 10-15 seconds where lineup info is displayed
+
+### 3. Horse Detector (`src/horse_detector.py`)
 - YOLOv8x model for horse detection
-- ByteTrack for multi-object tracking across frames
+- Basic ByteTrack for initial object detection
 - Color feature extraction for horse/jockey identification
 - Confidence-based filtering and annotation
 
-### 3. Trip Analyzer (`src/trip_analyzer.py`)
+### 4. Improved Horse Tracker (`src/horse_tracker.py`) **NEW**
+- **Maintains consistent horse IDs (1-8)** throughout race
+- **EasyOCR integration** for reading saddle cloth numbers
+- **Re-identification features** using color histograms + Gabor filters
+- **Handles temporary occlusions** with position prediction
+- **Object permanence** - tracks horses even when off-screen
+
+### 5. Trip Analyzer (`src/trip_analyzer.py`)
 - Real-time position tracking for each horse
 - Event detection algorithms:
   - **Boxed In**: Horse surrounded with no clear path
@@ -33,13 +47,13 @@ Quantify trip difficulty (0-100 scale) by detecting and analyzing various racing
   - Energy distribution across race quarters
   - Speed variance and acceleration patterns
 
-### 4. Video Processor (`src/video_processor.py`)
+### 6. Video Processor (`src/video_processor.py`)
 - Main pipeline orchestrating detection → tracking → analysis
 - Generates annotated videos with bounding boxes
 - Produces JSON analysis and human-readable reports
 - Handles frame-by-frame processing with progress tracking
 
-### 5. Batch Processor (`batch_processor.py`)
+### 7. Batch Processor (`batch_processor.py`)
 - Parallel processing of multiple races
 - Aggregates results into CSV/JSON
 - Statistical analysis across races
@@ -97,10 +111,16 @@ Score = (Event Severity × 10) + (Ground Loss × 20) + Pace Penalty + (Speed Var
 ## Usage Examples
 
 ```bash
-# Single race with annotation
+# Auto-detect horse count and analyze (recommended)
 python main.py --race-code 194367 --save-annotated
 
-# Batch processing without re-downloading
+# Force specific horse count
+python main.py --race-code 194367 --num-horses 12 --save-annotated
+
+# Disable auto-detection
+python main.py --race-code 194367 --no-auto-detect
+
+# Batch processing with auto-detection
 python batch_processor.py --race-file races.txt --no-download --max-workers 4
 
 # Process existing video
