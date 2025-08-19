@@ -1,0 +1,43 @@
+# Core dependencies
+torch>=2.0.0
+torchvision>=0.15.0
+opencv-python>=4.8.0
+numpy>=1.24.0
+pandas>=2.0.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Computer Vision and Tracking
+ultralytics>=8.0.0  # YOLOv8 for horse detection
+supervision>=0.16.0  # Video annotation and tracking
+lap>=0.4.0  # Linear assignment for tracking
+
+# Video Processing
+moviepy>=1.0.3
+ffmpeg-python>=0.2.0
+yt-dlp>=2023.7.6  # For video downloading
+
+# Web Scraping
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+selenium>=4.15.0
+webdriver-manager>=4.0.0
+
+# Data Processing and ML
+scikit-learn>=1.3.0
+scipy>=1.11.0
+shapely>=2.0.0  # For geometric calculations
+
+# Utilities
+tqdm>=4.65.0
+python-dotenv>=1.0.0
+pyyaml>=6.0
+loguru>=0.7.0
+
+# Development
+pytest>=7.4.0
+black>=23.0.0
+flake8>=6.0.0
+mypy>=1.5.0
+jupyter>=1.0.0
+ipywidgets>=8.0.0
