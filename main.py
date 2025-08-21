@@ -28,6 +28,8 @@ def main():
                        help="Expected number of horses in the race (auto-detect if not specified)")
     parser.add_argument("--no-auto-detect", action="store_true",
                        help="Disable automatic horse count detection")
+    parser.add_argument("--target-fps", type=float, default=1.0,
+                       help="Target processing frame rate (default: 1.0 fps)")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
     
     args = parser.parse_args()
@@ -58,13 +60,20 @@ def main():
         if not Path(video_path).exists():
             logger.error(f"Video file not found: {video_path}")
             sys.exit(1)
+        
+        # Extract race code from filename if not provided
+        if race_code is None:
+            video_name = Path(video_path).stem
+            if "race_" in video_name:
+                race_code = video_name.split("race_")[1].split("_")[0]
     
     logger.info("Processing video...")
     processor = VideoProcessor(
         output_dir=args.output_dir,
         save_annotated=args.save_annotated,
         expected_horses=args.num_horses,
-        auto_detect_horses=not args.no_auto_detect
+        auto_detect_horses=not args.no_auto_detect,
+        target_fps=args.target_fps
     )
     
     results = processor.process_video(video_path, race_code)

@@ -81,14 +81,13 @@ class RaceStartDetector:
         height, width = frame.shape[:2]
         detected = set()
         
-        # Focus on the virtual position bar area (15% from bottom, spanning full width)
-        bar_height = int(height * 0.08)  # Bar is roughly 8% of screen height
-        bar_y_start = int(height * 0.82)  # Start at 82% down (18% from bottom)
-        bar_y_end = bar_y_start + bar_height
+        # Focus on the virtual position bar area - colored numbers 1-8 at bottom
+        bar_y_start = int(height * 0.85)  # 15% from bottom
+        bar_y_end = int(height * 0.92)    # 8% from bottom
         
-        # The position bar spans most of the width but might have margins
-        bar_x_start = int(width * 0.05)  # 5% margin from left
-        bar_x_end = int(width * 0.95)    # 5% margin from right
+        # The position bar with colored numbers is centered 
+        bar_x_start = int(width * 0.15)   # 15% margin from left
+        bar_x_end = int(width * 0.85)     # 15% margin from right
         
         position_bar_roi = frame[bar_y_start:bar_y_end, bar_x_start:bar_x_end]
         
@@ -260,9 +259,9 @@ class RaceStartDetector:
         
         fps = cap.get(cv2.CAP_PROP_FPS) or 30
         
-        # Sample frames throughout the first 60 seconds to catch position bar updates
-        duration_seconds = 60
-        sample_interval = 3  # Every 3 seconds
+        # Sample frames throughout the first 120 seconds to catch position bar updates
+        duration_seconds = 120
+        sample_interval = 2  # Every 2 seconds for more coverage
         
         from tqdm import tqdm
         samples = duration_seconds // sample_interval
@@ -288,7 +287,7 @@ class RaceStartDetector:
             pbar.update(1)
             
             # Early exit if we've found a stable set of horses
-            if len(all_horses) >= 8 and second > 15:  # After 15 seconds, if we have 8+ horses
+            if len(all_horses) >= 8 and second > 30:  # After 30 seconds, if we have 8+ horses
                 logger.info(f"Found stable set of {len(all_horses)} horses, stopping early")
                 break
         

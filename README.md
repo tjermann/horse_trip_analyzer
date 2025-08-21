@@ -18,6 +18,7 @@ A deep learning computer vision system for analyzing horse racing trips at scale
 - **Automatic horse count detection** from race start screens
 - **Advanced OCR-based horse number recognition** from saddle cloths
 - **Improved multi-object tracking** with re-identification features
+- **Optimized frame processing** (1 fps default for 25x speed increase)
 - Automated video scraping from TJK website
 - Batch processing for multiple races
 - Detailed trip difficulty scoring (0-100 scale)
@@ -27,14 +28,25 @@ A deep learning computer vision system for analyzing horse racing trips at scale
 
 ```bash
 # Clone the repository
-cd /home/tyler/Documents/Horse/horse_trip_analyzer
+git clone <repository-url>
+cd horse_trip_analyzer
 
 # Install dependencies
 pip install -r requirements.txt
 
+# Download YOLOv8 model (required - too large for git)
+python -c "from ultralytics import YOLO; YOLO('yolov8x.pt')"
+# This will download yolov8x.pt (~140MB) to the current directory
+
+# Alternative: Manual download
+# wget https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8x.pt
+
 # Create necessary directories
 mkdir -p data/{videos,processed} logs models
 ```
+
+### Important: YOLOv8 Model Required
+The YOLOv8x model file (`yolov8x.pt`) is required but not included in the repository due to its size (~140MB). The model will be automatically downloaded on first run, or you can download it manually using the commands above.
 
 ## Usage
 
@@ -49,6 +61,12 @@ python main.py --race-code 194367 --num-horses 8
 
 # Disable auto-detection (uses default 8 horses)
 python main.py --race-code 194367 --no-auto-detect
+
+# Process at higher quality (slower)
+python main.py --race-code 194367 --target-fps 4.0
+
+# Ultra-fast processing for testing
+python main.py --race-code 194367 --target-fps 0.5
 
 # Analyze existing video
 python main.py --video-path data/videos/race_194367.mp4
@@ -110,9 +128,10 @@ horse_trip_analyzer/
 
 ## Performance Considerations
 
-- Processing speed: ~2-5 fps on GPU, ~0.5-1 fps on CPU
-- Memory usage: ~4GB for 1080p video
-- Recommended: CUDA-capable GPU for faster processing
+- **Processing speed**: ~30-60 seconds per 3-minute race (1 fps mode)
+- **Memory usage**: ~2GB for 1080p video (reduced due to frame skipping)
+- **CPU-friendly**: Optimized for CPU processing, GPU optional
+- **Speed options**: 0.5-4 fps (25x to 6x speedup vs full framerate)
 
 ## Recent Improvements
 
@@ -120,6 +139,8 @@ horse_trip_analyzer/
 - [x] **OCR-based horse number recognition** from saddle cloths  
 - [x] **Improved tracking** with re-identification to maintain consistent horse IDs
 - [x] **Better object permanence** handling temporary occlusions
+- [x] **Optimized frame processing** (1 fps default for 25x speed increase)
+- [x] **CPU-friendly processing** making GPU optional for most users
 
 ## Future Enhancements
 

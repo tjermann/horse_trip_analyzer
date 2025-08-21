@@ -34,11 +34,11 @@ class PositionBarTracker:
         """
         height, width = frame.shape[:2]
         
-        # Expected position: 15% from bottom, spanning most of width
-        estimated_y_start = int(height * 0.82)  # 18% from bottom
-        estimated_y_end = int(height * 0.90)    # 10% from bottom
-        estimated_x_start = int(width * 0.05)   # 5% from left
-        estimated_x_end = int(width * 0.95)     # 5% from right
+        # Based on screenshot: colored numbers 1-8 at ~10-12% from bottom
+        estimated_y_start = int(height * 0.85)  # 15% from bottom
+        estimated_y_end = int(height * 0.92)    # 8% from bottom  
+        estimated_x_start = int(width * 0.15)   # 15% from left (numbers are centered)
+        estimated_x_end = int(width * 0.85)     # 15% from right
         
         # Look for horizontal bars/rectangles in this region
         roi = frame[estimated_y_start:estimated_y_end, estimated_x_start:estimated_x_end]
@@ -73,9 +73,9 @@ class PositionBarTracker:
             logger.info(f"Detected position bar at: {self.bar_location}")
             return self.bar_location
         
-        # Fallback to estimated location
+        # Fallback to estimated location based on screenshot analysis
         self.bar_location = (estimated_x_start, estimated_y_start, estimated_x_end, estimated_y_end)
-        logger.warning(f"Could not auto-detect position bar, using estimated location: {self.bar_location}")
+        logger.info(f"Using position bar location based on screenshot analysis: {self.bar_location}")
         return self.bar_location
     
     def read_position_bar(self, frame: np.ndarray, frame_num: int, fps: float = 30.0) -> Optional[PositionBarReading]:
@@ -163,27 +163,37 @@ class PositionBarTracker:
         
         processed_images = []
         
-        # High contrast enhancement (good for overlay text)
+        # For colored numbers on overlay, try different color space extractions
+        
+        # Extract different color channels that might highlight the colored numbers
+        bgr_channels = cv2.split(roi)
+        processed_images.append(("blue_channel", bgr_channels[0]))
+        processed_images.append(("green_channel", bgr_channels[1]))
+        processed_images.append(("red_channel", bgr_channels[2]))
+        
+        # HSV color space - good for colored text
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        hsv_channels = cv2.split(hsv)
+        processed_images.append(("hue_channel", hsv_channels[0]))
+        processed_images.append(("saturation_channel", hsv_channels[1]))
+        processed_images.append(("value_channel", hsv_channels[2]))
+        
+        # High contrast enhancement
         clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
         enhanced = clahe.apply(gray)
         processed_images.append(("enhanced", enhanced))
         
-        # Binary threshold optimized for white text on dark background
-        _, thresh_inv = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-        processed_images.append(("binary_inv", thresh_inv))
+        # Binary thresholds with different parameters for colored overlays
+        _, thresh_high = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY)
+        processed_images.append(("thresh_high", thresh_high))
         
-        # Binary threshold for dark text on light background
-        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        processed_images.append(("binary", thresh))
+        _, thresh_low = cv2.threshold(gray, 100, 255, cv2.THRESH_BINARY)
+        processed_images.append(("thresh_low", thresh_low))
         
         # Adaptive threshold
         adaptive = cv2.adaptiveThreshold(enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
                                        cv2.THRESH_BINARY, 11, 2)
         processed_images.append(("adaptive", adaptive))
-        
-        # Edge-enhanced version
-        edges = cv2.Canny(enhanced, 50, 150)
-        processed_images.append(("edges", edges))
         
         return processed_images
     

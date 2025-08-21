@@ -89,6 +89,10 @@ temp/
 *.temp
 *.bak
 
+# Debug files
+debug_frame_*.jpg
+test_*.py
+
 # Cache
 .cache/
 *.cache

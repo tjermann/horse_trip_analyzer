@@ -15,6 +15,7 @@ Build a deep learning system to analyze horse racing videos and quantify trip di
 - [x] **Automatic horse count detection from race start** 🆕
 - [x] **Advanced multi-object tracking with re-identification** 🆕
 - [x] **OCR-based horse number recognition** 🆕
+- [x] **Optimized frame processing (1 fps default)** 🆕
 - [x] Trip event detection system
 - [x] Difficulty scoring algorithm
 - [x] Batch processing pipeline
@@ -66,9 +67,9 @@ Build a deep learning system to analyze horse racing videos and quantify trip di
 
 1. **Model Accuracy**: Using generic YOLOv8, not trained on horses specifically
 2. **Track Geometry**: Assumes uniform track, doesn't account for turns  
-3. **Scale**: Processes ~2-5 fps on GPU, not real-time
-4. **Video Quality**: Dependent on source video resolution
-5. **OCR Accuracy**: Horse number detection works ~70-80% of the time
+3. **Video Quality**: Dependent on source video resolution
+4. **OCR Accuracy**: Horse number detection works ~70-80% of the time
+5. **Frame Sampling**: May miss very brief events (sub-second incidents)
 
 ## Quick Start Commands
 
@@ -78,11 +79,15 @@ conda create -n horse_racing python=3.11 -y
 conda activate horse_racing
 pip install -r requirements.txt
 
-# Test single race (auto-detects horse count)
+# Test single race (auto-detects horse count, 1 fps default)
 python main.py --race-code 194367 --save-annotated
 
 # Force specific horse count
 python main.py --race-code 194367 --num-horses 8
+
+# Speed options
+python main.py --race-code 194367 --target-fps 2.0  # Higher quality
+python main.py --race-code 194367 --target-fps 0.5  # Ultra-fast
 
 # Run batch analysis (auto-detects for each race)
 python batch_processor.py --race-codes 194367 194368 194369
@@ -107,10 +112,10 @@ python batch_processor.py --race-codes 194367 194368 194369
 - `requirements.txt` - Dependencies (added EasyOCR)
 
 ## Performance Metrics
-- Processing Speed: 2-5 fps (GPU), 0.5-1 fps (CPU)
+- Processing Speed: ~30-60 seconds per 3-minute race (1 fps mode)
 - Detection Confidence: ~0.3-0.8 (needs improvement)
-- Memory Usage: ~4GB for 1080p video
-- Batch Capacity: 2-4 parallel videos
+- Memory Usage: ~2GB for 1080p video (reduced due to frame skipping)
+- Batch Capacity: 4-8 parallel videos (CPU optimized)
 
 ## Known Issues
 1. Selenium ChromeDriver may need manual setup

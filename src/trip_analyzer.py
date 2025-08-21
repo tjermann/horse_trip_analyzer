@@ -7,6 +7,7 @@ from scipy.spatial import distance
 from scipy.signal import savgol_filter
 from loguru import logger
 import json
+from .position_interpolator import SmartPositionTracker, InterpolatedPosition
 
 
 class TripEvent(Enum):
@@ -21,6 +22,7 @@ class TripEvent(Enum):
     TRAFFIC_TROUBLE = "traffic_trouble"
     RAIL_TRIP = "rail_trip"
     PACE_PRESSURE = "pace_pressure"
+    WIND_RESISTANCE = "wind_resistance"
 
 
 @dataclass
@@ -72,6 +74,7 @@ class TripAnalyzer:
         self.fps = fps
         self.frame_buffer = {}
         self.horse_histories = {}
+        self.position_tracker = SmartPositionTracker()
         
     def update_frame(self, frame_num: int, detections: List, frame_shape: Tuple[int, int]):
         frame_positions = []
@@ -105,6 +108,14 @@ class TripAnalyzer:
         
         self._calculate_relative_positions(frame_positions)
         self.frame_buffer[frame_num] = frame_positions
+        
+        # Add positions to the smart tracker for interpolation
+        for pos in frame_positions:
+            if pos.track_id is not None:
+                detection_confidence = 0.8  # Could come from detector
+                self.position_tracker.add_detection(
+                    frame_num, pos.track_id, pos.position_in_field, detection_confidence
+                )
         
         self._detect_events(frame_num, frame_positions)
     
@@ -142,18 +153,23 @@ class TripAnalyzer:
             pos.position_in_field = i + 1
     
     def _detect_events(self, frame_num: int, positions: List[HorsePosition]):
-        # Only check events every 15 frames (every 0.5 seconds) to reduce noise
-        if frame_num % 15 != 0:
+        # With 1 fps processing, check every frame
+        # Only check events every 3 frames (every 3 seconds) to reduce noise
+        if frame_num % 3 != 0:
+            return
+        
+        # Ignore events in first 10 seconds (gate break jockeying)
+        if (frame_num / self.fps) < 10.0:
             return
             
         for pos in positions:
             history = self.horse_histories[pos.track_id]
             
-            # Need more history for reliable detection
-            if len(history) < 30:
+            # Need some history for reliable detection (reduced from 30 to 5 for 1fps)
+            if len(history) < 5:
                 continue
             
-            recent_positions = history[-30:]  # Look at last 30 positions
+            recent_positions = history[-5:]  # Look at last 5 positions (5 seconds at 1fps)
             
             if self._is_boxed_in(pos, positions):
                 self._add_event(pos.track_id, frame_num, TripEvent.BOXED_IN)
@@ -166,6 +182,10 @@ class TripAnalyzer:
             
             if self._detect_steadied(recent_positions):
                 self._add_event(pos.track_id, frame_num, TripEvent.STEADIED)
+            
+            # Check for wind resistance (leading horse breaking wind)
+            if self._is_front_runner(pos, positions, history):
+                self._add_event(pos.track_id, frame_num, TripEvent.WIND_RESISTANCE)
     
     def _is_boxed_in(self, horse_pos: HorsePosition, all_positions: List[HorsePosition]) -> bool:
         if len(all_positions) < 3:
@@ -238,6 +258,27 @@ class TripAnalyzer:
         
         return False
     
+    def _is_front_runner(self, horse_pos: HorsePosition, all_positions: List[HorsePosition], 
+                        history: List[HorsePosition]) -> bool:
+        """
+        Detect if horse is leading and breaking wind for extended period
+        """
+        # Must be in 1st or 2nd position
+        if horse_pos.position_in_field > 2:
+            return False
+        
+        # Check if horse has been leading for sustained period (at least 30 positions)
+        if len(history) < 30:
+            return False
+        
+        # Count how many recent positions were in front (1st or 2nd)
+        recent_front_positions = sum(1 for p in history[-30:] if p.position_in_field <= 2)
+        
+        # Must have been in front for at least 80% of recent positions
+        front_ratio = recent_front_positions / len(history[-30:])
+        
+        return front_ratio >= 0.8
+    
     def _add_event(self, track_id: int, frame_num: int, event_type: TripEvent):
         if track_id not in self.horse_histories:
             return
@@ -273,12 +314,17 @@ class TripAnalyzer:
             TripEvent.STEADIED: 0.7,
             TripEvent.CHECKED: 0.85,
             TripEvent.TRAFFIC_TROUBLE: 0.75,
-            TripEvent.PACE_PRESSURE: 0.5
+            TripEvent.PACE_PRESSURE: 0.5,
+            TripEvent.WIND_RESISTANCE: 0.4  # Constant energy cost but lower than incidents
         }
         return severity_map.get(event_type, 0.5)
     
     def analyze_trips(self) -> List[TripAnalysis]:
         analyses = []
+        
+        # Get interpolated positions to handle missing detections
+        interpolated_positions = self.position_tracker.get_complete_positions()
+        tracking_quality = self.position_tracker.get_tracking_quality_report()
         
         for track_id, history in self.horse_histories.items():
             if len(history) < 30:
@@ -286,16 +332,35 @@ class TripAnalyzer:
             
             analysis = TripAnalysis(track_id=track_id)
             
+            # Use interpolated positions for more accurate analysis
+            if track_id in interpolated_positions:
+                smoothed_positions = interpolated_positions[track_id]
+                
+                # Create position chart from smoothed data (sample every ~10 seconds)
+                sample_interval = max(1, len(smoothed_positions) // 10)
+                analysis.position_chart = [
+                    pos.position for pos in smoothed_positions[::sample_interval]
+                ]
+                
+                if smoothed_positions:
+                    analysis.final_position = smoothed_positions[-1].position
+                
+                # Log tracking quality
+                if track_id in tracking_quality:
+                    quality = tracking_quality[track_id]
+                    logger.debug(f"Horse {track_id} tracking quality: {quality['quality_score']:.2f}")
+                    if quality['issues']:
+                        for issue in quality['issues'][:2]:  # Log first 2 issues
+                            logger.debug(f"  - {issue['description']}")
+            else:
+                # Fallback to original data
+                analysis.position_chart = [p.position_in_field for p in history[::30]]
+                if history:
+                    analysis.final_position = history[-1].position_in_field
+            
             analysis.ground_loss = self._calculate_ground_loss(history)
-            
             analysis.pace_scenario = self._determine_pace_scenario(history)
-            
             analysis.energy_distribution = self._analyze_energy_distribution(history)
-            
-            analysis.position_chart = [p.position_in_field for p in history[::30]]
-            
-            if history:
-                analysis.final_position = history[-1].position_in_field
             
             if hasattr(self, 'events') and track_id in self.events:
                 analysis.events = self.events[track_id]
