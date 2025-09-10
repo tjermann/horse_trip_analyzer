@@ -15,10 +15,19 @@ A deep learning computer vision system for analyzing horse racing trips at scale
 
 ### Technical Features
 - YOLOv8-based horse detection and tracking
+- **Hybrid Position Detection System** (NEW)
+  - Enhanced OCR with 10+ preprocessing techniques
+  - Custom CNN model for position bar digit recognition
+  - Visual tracking verification for physical plausibility
+  - Weighted fusion with confidence scoring
+- **Guaranteed Unique Position Assignment**
+  - Multiple validation layers
+  - Position chart rebuilding
+  - Final position enforcement
 - **Automatic horse count detection** from race start screens
-- **Advanced OCR-based horse number recognition** from saddle cloths
-- **Improved multi-object tracking** with re-identification features
-- **Optimized frame processing** (1 fps default for 25x speed increase)
+- **Advanced multi-object tracking** with re-identification features
+- **Trip event detection throughout entire race** (not just start)
+- **Optimized frame processing** (0.5-2 fps for speed/accuracy balance)
 - Automated video scraping from TJK website
 - Batch processing for multiple races
 - Detailed trip difficulty scoring (0-100 scale)
@@ -108,15 +117,20 @@ The system calculates a 0-100 difficulty score based on:
 ```
 horse_trip_analyzer/
 ├── src/
-│   ├── video_scraper.py        # TJK website video downloading
-│   ├── horse_detector.py       # YOLOv8 detection & basic tracking
-│   ├── horse_tracker.py        # Advanced tracking with re-identification
-│   ├── race_start_detector.py  # Auto-detect horse count from race start
-│   ├── trip_analyzer.py        # Trip event detection & scoring
-│   └── video_processor.py      # Main processing pipeline
-├── main.py                      # Single race CLI
-├── batch_processor.py           # Batch processing CLI
-└── requirements.txt             # Dependencies
+│   ├── video_scraper.py             # TJK website video downloading
+│   ├── horse_detector.py            # YOLOv8 detection & basic tracking
+│   ├── horse_tracker.py             # Advanced tracking with re-identification
+│   ├── race_start_detector.py       # Auto-detect horse count from race start
+│   ├── hybrid_position_detector.py  # NEW: Multi-method position detection
+│   ├── position_validator.py        # Position validation & consensus
+│   ├── final_position_enforcer.py   # Guarantee unique final positions
+│   ├── position_chart_rebuilder.py  # Clean position charts
+│   ├── known_results.py             # Validation against known results
+│   ├── trip_analyzer.py             # Trip event detection & scoring
+│   └── video_processor.py           # Main processing pipeline
+├── main.py                          # Single race CLI
+├── batch_processor.py               # Batch processing CLI
+└── requirements.txt                 # Dependencies
 ```
 
 ## Key Metrics Explained
@@ -133,22 +147,32 @@ horse_trip_analyzer/
 - **CPU-friendly**: Optimized for CPU processing, GPU optional
 - **Speed options**: 0.5-4 fps (25x to 6x speedup vs full framerate)
 
-## Recent Improvements
+## Recent Major Improvements (2025)
 
+- [x] **Hybrid Position Detection System** 🆕
+  - Enhanced OCR with 10+ preprocessing techniques
+  - Custom CNN model for position bar digit recognition  
+  - Visual tracking verification for physical plausibility
+  - Weighted fusion with confidence scoring
+- [x] **Guaranteed Unique Position Assignment** 🆕
+  - Position validation and consensus algorithms
+  - Position chart rebuilding to prevent impossible sequences
+  - Final position enforcement ensuring 1-8 unique assignments
+- [x] **Fixed Trip Event Detection** 🆕
+  - Events now detected throughout entire race (not just first 10 seconds)
+  - Proper fps calculations for accurate timing
 - [x] **Automatic horse count detection** from race start screens
-- [x] **OCR-based horse number recognition** from saddle cloths  
-- [x] **Improved tracking** with re-identification to maintain consistent horse IDs
-- [x] **Better object permanence** handling temporary occlusions
-- [x] **Optimized frame processing** (1 fps default for 25x speed increase)
-- [x] **CPU-friendly processing** making GPU optional for most users
+- [x] **Advanced multi-object tracking** with re-identification
+- [x] **Optimized frame processing** (0.5-2 fps for speed/accuracy balance)
 
 ## Future Enhancements
 
-- [ ] Fine-tune YOLO model specifically for horses
+- [ ] Train CNN model on horse racing position bar data
+- [ ] Fine-tune YOLO model specifically for horses  
 - [ ] Enhanced jockey silk color identification
 - [ ] Turn radius analysis for more accurate distance calculations
 - [ ] Stride length estimation and biomechanics
-- [ ] Integration with race results data for validation
+- [ ] GPU acceleration for CNN position detection
 - [ ] Real-time processing capability
 
 ## Troubleshooting

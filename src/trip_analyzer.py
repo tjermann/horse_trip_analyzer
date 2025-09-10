@@ -159,7 +159,12 @@ class TripAnalyzer:
             return
         
         # Ignore events in first 10 seconds (gate break jockeying)
-        if (frame_num / self.fps) < 10.0:
+        time_in_race = frame_num / self.fps
+        if time_in_race < 10.0:
+            return
+        
+        # Also stop detecting after 3 minutes (race should be over)
+        if time_in_race > 180.0:
             return
             
         for pos in positions:

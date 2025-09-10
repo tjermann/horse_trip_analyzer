@@ -12,6 +12,11 @@ from .trip_analyzer import TripAnalyzer, TripAnalysis
 from .race_start_detector import detect_race_horses
 from .position_bar_reader import RacePositionTracker
 from .horse_identity_mapper import HorseIdentityMapper
+from .position_validator import PositionValidator
+from .final_position_enforcer import FinalPositionEnforcer
+from .position_chart_rebuilder import PositionChartRebuilder
+from .known_results import KnownResults
+from .hybrid_position_detector import HybridPositionDetector
 
 
 class VideoProcessor:
@@ -20,7 +25,7 @@ class VideoProcessor:
                  save_annotated: bool = True,
                  expected_horses: Optional[int] = None,
                  auto_detect_horses: bool = True,
-                 target_fps: float = 1.0):
+                 target_fps: float = 2.0):  # Increased to 2 fps for better OCR accuracy
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.save_annotated = save_annotated
@@ -30,9 +35,14 @@ class VideoProcessor:
         
         self.detector = HorseDetector()
         self.jockey_identifier = JockeyColorIdentifier()
-        self.analyzer = TripAnalyzer()
+        # Pass target_fps to analyzer so time calculations are correct
+        self.analyzer = TripAnalyzer(fps=target_fps)
         self.position_tracker = RacePositionTracker(expected_horses=expected_horses if expected_horses else 8)  # PRIMARY position source
         self.identity_mapper = HorseIdentityMapper()  # Fuses position bar + visual tracking
+        self.position_validator = None  # Will be initialized after horse count detection
+        self.position_enforcer = None  # Will be initialized after horse count detection
+        self.chart_rebuilder = None  # Will be initialized after horse count detection
+        self.hybrid_detector = None  # Will be initialized after horse count detection
         
         # Tracker will be initialized after horse count detection
         self.tracker = None
@@ -55,8 +65,12 @@ class VideoProcessor:
             self.expected_horses = 8
             logger.info("Using default of 8 horses")
         
-        # Initialize tracker with detected horse count
+        # Initialize tracker, validator, enforcer, rebuilder, and hybrid detector with detected horse count
         self.tracker = ImprovedHorseTracker(expected_horses=self.expected_horses)
+        self.position_validator = PositionValidator(num_horses=self.expected_horses)
+        self.position_enforcer = FinalPositionEnforcer(num_horses=self.expected_horses)
+        self.chart_rebuilder = PositionChartRebuilder(num_horses=self.expected_horses)
+        self.hybrid_detector = HybridPositionDetector(num_horses=self.expected_horses)
         
         cap = cv2.VideoCapture(str(video_path))
         
@@ -89,16 +103,66 @@ class VideoProcessor:
             
             # Only process every Nth frame for speed
             if frame_num % frame_skip == 0:
-                # FIRST: Read the position bar - this is our PRIMARY source
-                position_snapshot = self.position_tracker.process_frame(frame, processed_frames, self.target_fps)
-                
-                # SECOND: Do visual detection and tracking
+                # FIRST: Do visual detection and tracking
                 detections = self.detector.detect_horses(frame)
                 
                 # Use improved tracker to maintain consistent track_ids
                 tracked_horses = self.tracker.update(detections, frame)
                 
-                # THIRD: Fuse position bar + visual tracking for horse identities
+                # SECOND: Use HYBRID detector for positions (combines OCR, CNN, and visual)
+                hybrid_positions = self.hybrid_detector.detect_positions(
+                    frame, detections, processed_frames, self.target_fps)
+                
+                # THIRD: Still use original position tracker for fallback
+                position_snapshot = self.position_tracker.process_frame(frame, processed_frames, self.target_fps)
+                
+                # Override position snapshot with hybrid detector results if available
+                if hybrid_positions:
+                    # Convert hybrid positions to position snapshot format
+                    # Sort horses by position to get the order
+                    sorted_horses = sorted(hybrid_positions.items(), key=lambda x: x[1][0])
+                    horse_order = [horse_id for horse_id, _ in sorted_horses]
+                    
+                    # Update position snapshot with hybrid results
+                    if position_snapshot:
+                        position_snapshot.positions = horse_order
+                        # Calculate average confidence
+                        avg_confidence = np.mean([conf for _, (_, conf) in hybrid_positions.items()])
+                        position_snapshot.confidence = avg_confidence
+                        logger.debug(f"Frame {processed_frames}: HYBRID positions: {horse_order} (conf: {avg_confidence:.2f})")
+                    else:
+                        # Create new snapshot from hybrid data
+                        from .position_bar_reader import PositionBarSnapshot
+                        position_snapshot = PositionBarSnapshot(
+                            frame_num=processed_frames,
+                            timestamp=processed_frames / self.target_fps,
+                            positions=horse_order,
+                            confidence=np.mean([conf for _, (_, conf) in hybrid_positions.items()])
+                        )
+                        logger.debug(f"Frame {processed_frames}: Created snapshot from HYBRID detector")
+                else:
+                    # Fallback to original validation if hybrid fails
+                    if position_snapshot and position_snapshot.positions:
+                        # Get visual order of horses
+                        visual_order = []
+                        if detections:
+                            sorted_detections = sorted(detections, key=lambda d: (d.bbox[0] + d.bbox[2]) / 2)
+                            visual_order = [d.track_id for d in sorted_detections if hasattr(d, 'track_id')]
+                        
+                        # Validate and disambiguate positions
+                        validated_positions = self.position_validator.validate_positions(
+                            ocr_positions=position_snapshot.positions,
+                            visual_order=visual_order,
+                            frame_num=processed_frames
+                        )
+                        
+                        # Update position snapshot with validated positions
+                        if validated_positions:
+                            validated_horse_order = [vp.horse_number for vp in validated_positions]
+                            position_snapshot.positions = validated_horse_order
+                            logger.debug(f"Frame {processed_frames}: Fallback validated positions: {validated_horse_order}")
+                
+                # FOURTH: Fuse position bar + visual tracking for horse identities
                 self.identity_mapper.update_frame(detections, position_snapshot, processed_frames)
                 
                 # Update trip analyzer with tracked horses
@@ -152,28 +216,94 @@ class VideoProcessor:
         # Create analyses based on FUSED position bar + visual tracking data
         valid_analyses = []
         
-        # Get final positions from identity mapper (combines position bar + visual tracking)
-        final_positions_visual = self.identity_mapper.get_final_positions()
-        winner_visual = self.identity_mapper.get_winner()
+        # Get final positions from multiple sources and enforce uniqueness
+        position_sources = []
         
-        logger.info(f"Visual tracking final positions: {final_positions_visual}")
-        logger.info(f"Visual tracking winner: #{winner_visual}")
+        # Source 1: Position validator (highest priority)
+        validator_positions = self.position_validator.get_final_positions(last_percent=0.1)
+        if validator_positions:
+            position_sources.append(("Validator", validator_positions))
+        
+        # Source 2: Identity mapper
+        identity_positions = self.identity_mapper.get_final_positions()
+        if identity_positions:
+            position_sources.append(("Identity Mapper", identity_positions))
+        
+        # Source 3: Position bar raw data (lowest priority)
+        if position_summary and 'horse_journeys' in position_summary:
+            raw_positions = {}
+            for horse_num, journey in position_summary['horse_journeys'].items():
+                if journey.get('finish'):
+                    raw_positions[horse_num] = journey['finish']
+            if raw_positions:
+                position_sources.append(("Position Bar Raw", raw_positions))
+        
+        # ENFORCE unique final positions
+        if position_sources:
+            final_positions_enforced = self.position_enforcer.enforce_unique_positions(position_sources)
+        else:
+            # Last resort - fallback positions
+            horses_detected = position_summary.get('horses_detected', list(range(1, self.expected_horses + 1)))
+            final_positions_enforced = self.position_enforcer.create_fallback_positions(horses_detected)
+        
+        winner_enforced = None
+        for horse_num, position in final_positions_enforced.items():
+            if position == 1:
+                winner_enforced = horse_num
+                break
+        
+        logger.info(f"ENFORCED final positions (GUARANTEED UNIQUE): {final_positions_enforced}")
+        logger.info(f"ENFORCED winner: #{winner_enforced}")
+        
+        # Validate against known results if available (for debugging only)
+        if race_code:
+            known_positions = KnownResults.create_position_map(race_code, self.expected_horses)
+            if known_positions:
+                logger.info("=" * 60)
+                logger.info("VALIDATION: Comparing with known race results")
+                correct_count = 0
+                for horse_num, enforced_pos in final_positions_enforced.items():
+                    if horse_num in known_positions:
+                        known_pos = known_positions[horse_num]
+                        if enforced_pos == known_pos:
+                            logger.info(f"  ✅ Horse #{horse_num}: Position {enforced_pos} (correct)")
+                            correct_count += 1
+                        else:
+                            logger.warning(f"  ❌ Horse #{horse_num}: Position {enforced_pos} (should be {known_pos})")
+                accuracy = (correct_count / len(known_positions)) * 100
+                logger.info(f"Position accuracy: {correct_count}/{len(known_positions)} ({accuracy:.1f}%)")
+                logger.info("=" * 60)
         
         if position_summary and 'horses_detected' in position_summary:
             horses_in_race = position_summary['horses_detected']
             horse_journeys = position_summary.get('horse_journeys', {})
             
-            # Override final positions with visual tracking data (more reliable)
+            # Override final positions with ENFORCED data (guaranteed unique)
             for horse_num in horses_in_race:
-                if horse_num in final_positions_visual:
+                if horse_num in final_positions_enforced:
                     if horse_num in horse_journeys:
-                        horse_journeys[horse_num]['finish'] = final_positions_visual[horse_num]
-                        logger.debug(f"Updated Horse #{horse_num} finish position to {final_positions_visual[horse_num]} from visual tracking")
+                        horse_journeys[horse_num]['finish'] = final_positions_enforced[horse_num]
+                        logger.debug(f"Updated Horse #{horse_num} finish position to {final_positions_enforced[horse_num]} from ENFORCED unique positions")
             
             logger.info(f"Position bar detected horses: {horses_in_race}")
             logger.info(f"Position bar winner: #{position_summary.get('winner')}, Second: #{position_summary.get('second')}, Third: #{position_summary.get('third')}")
-            if winner_visual:
-                logger.info(f"VISUAL TRACKING WINNER: #{winner_visual} (overriding position bar if different)")
+            if winner_enforced:
+                logger.info(f"FINAL ENFORCED WINNER: #{winner_enforced} (GUARANTEED UNIQUE POSITIONS)")
+            
+            # Rebuild position charts to ensure no duplicates at any time point
+            raw_charts = {}
+            for horse_num in horses_in_race:
+                if horse_num in horse_journeys and horse_journeys[horse_num].get('positions'):
+                    raw_charts[horse_num] = horse_journeys[horse_num]['positions']
+            
+            logger.info("Rebuilding position charts to ensure uniqueness at each time point")
+            cleaned_charts = self.chart_rebuilder.rebuild_charts(raw_charts)
+            
+            # Validate the cleaned charts
+            if not self.chart_rebuilder.validate_charts(cleaned_charts):
+                logger.error("Position chart validation failed - still has duplicates!")
+            else:
+                logger.info("✅ Position charts validated - no duplicates at any time point")
             
             # Create analysis for each horse detected by position bar
             for horse_num in horses_in_race:
@@ -182,8 +312,22 @@ class VideoProcessor:
                 # Get position journey from position bar
                 if horse_num in horse_journeys:
                     journey = horse_journeys[horse_num]
-                    analysis.position_chart = journey['positions']
-                    analysis.final_position = journey.get('finish')
+                    
+                    # Use CLEANED position chart (no duplicates)
+                    if horse_num in cleaned_charts:
+                        analysis.position_chart = cleaned_charts[horse_num]
+                        logger.debug(f"Horse #{horse_num}: Using cleaned position chart")
+                    else:
+                        analysis.position_chart = journey['positions']
+                        logger.warning(f"Horse #{horse_num}: No cleaned chart available, using raw data")
+                    
+                    # FORCE use of ENFORCED final position (guaranteed unique)
+                    if horse_num in final_positions_enforced:
+                        analysis.final_position = final_positions_enforced[horse_num]
+                        logger.info(f"Horse #{horse_num}: ENFORCED final position {final_positions_enforced[horse_num]} (guaranteed unique)")
+                    else:
+                        analysis.final_position = journey.get('finish')
+                        logger.error(f"Horse #{horse_num}: No enforced final position available - this should never happen!")
                     
                     # Determine pace scenario based on positions
                     # Need to check actual positions, not just average
@@ -276,10 +420,13 @@ class VideoProcessor:
         return results
     
     def generate_report(self, analysis_results: Dict) -> str:
+        from datetime import datetime
+        
         report_lines = []
         report_lines.append("=" * 80)
         report_lines.append("HORSE RACE TRIP ANALYSIS REPORT")
         report_lines.append("=" * 80)
+        report_lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         report_lines.append("")
         
         if analysis_results.get("race_code"):
@@ -288,6 +435,8 @@ class VideoProcessor:
         report_lines.append(f"Video: {Path(analysis_results['video_path']).name}")
         report_lines.append(f"Duration: {analysis_results['video_info']['duration']:.1f} seconds")
         report_lines.append(f"Horses Detected: {analysis_results['num_horses_detected']}")
+        report_lines.append(f"Processing FPS: {self.target_fps} fps")
+        report_lines.append(f"Frames Processed: {int(analysis_results['video_info']['total_frames'] / (analysis_results['video_info']['fps'] / self.target_fps))}")
         report_lines.append("")
         
         sorted_analyses = sorted(

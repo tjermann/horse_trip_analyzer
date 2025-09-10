@@ -76,10 +76,14 @@ class HorseIdentityMapper:
                         # We already know this horse - verify it's the same track_id
                         existing_track_id = self.number_to_track[horse_num]
                         if existing_track_id == track_id:
-                            # Confirmed identity
-                            self.horse_identities[track_id].confidence = min(1.0, 
-                                self.horse_identities[track_id].confidence + 0.1)
-                            self.horse_identities[track_id].last_position = position
+                            # Confirmed identity - check if track_id still exists
+                            if track_id in self.horse_identities:
+                                self.horse_identities[track_id].confidence = min(1.0, 
+                                    self.horse_identities[track_id].confidence + 0.1)
+                                self.horse_identities[track_id].last_position = position
+                            else:
+                                # Track ID was lost, recreate identity
+                                self._create_identity(track_id, horse_num, position, confidence=0.7)
                         else:
                             # Track ID changed - horse might have been re-assigned
                             logger.warning(f"Horse #{horse_num} track_id changed from {existing_track_id} to {track_id}")
@@ -175,7 +179,7 @@ class HorseIdentityMapper:
         # Look backwards for the most complete position mapping
         for mappings in reversed(self.position_history[-10:]):  # Check last 10 frames
             # Count horses with known identities
-            known_horses = sum(1 for m in mappings if m.horse_number > 0 and m.confidence > self.confidence_threshold)
+            known_horses = sum(1 for m in mappings if m.horse_number is not None and m.horse_number > 0 and m.confidence > self.confidence_threshold)
             if known_horses >= 3:  # Need at least 3 horses to be reliable
                 final_mappings = mappings
                 break
@@ -186,7 +190,7 @@ class HorseIdentityMapper:
         # Create final position mapping
         final_positions = {}
         for mapping in final_mappings:
-            if mapping.horse_number > 0 and mapping.confidence > self.confidence_threshold:
+            if mapping.horse_number is not None and mapping.horse_number > 0 and mapping.confidence > self.confidence_threshold:
                 final_positions[mapping.horse_number] = mapping.position
         
         logger.info(f"Final positions from visual tracking: {final_positions}")
@@ -198,7 +202,7 @@ class HorseIdentityMapper:
         
         for frame_mappings in self.position_history:
             for mapping in frame_mappings:
-                if mapping.horse_number == horse_number and mapping.confidence > self.confidence_threshold:
+                if mapping.horse_number is not None and mapping.horse_number == horse_number and mapping.confidence > self.confidence_threshold:
                     positions.append(mapping.position)
                     break
         

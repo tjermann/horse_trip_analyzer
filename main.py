@@ -28,8 +28,8 @@ def main():
                        help="Expected number of horses in the race (auto-detect if not specified)")
     parser.add_argument("--no-auto-detect", action="store_true",
                        help="Disable automatic horse count detection")
-    parser.add_argument("--target-fps", type=float, default=1.0,
-                       help="Target processing frame rate (default: 1.0 fps)")
+    parser.add_argument("--target-fps", type=float, default=2.0,
+                       help="Target processing frame rate (default: 2.0 fps for better OCR accuracy)")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
     
     args = parser.parse_args()

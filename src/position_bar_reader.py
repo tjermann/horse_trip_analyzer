@@ -25,11 +25,11 @@ class PositionBarReader:
     def __init__(self, expected_horses: int = 8):
         self.reader = easyocr.Reader(['en'], gpu=torch.cuda.is_available())
         self.expected_horses = expected_horses  # Only accept this many horses
-        # Position bar: colored number squares overlaid on video feed (above info bar)
-        self.bar_y_percent_start = 0.75  # Look in the video feed area
-        self.bar_y_percent_end = 0.87    # Above the bottom info bar
-        self.bar_x_percent_start = 0.10  # 10% from left - capture more width
-        self.bar_x_percent_end = 0.95    # 5% from right - include rightmost box!
+        # Position bar: colored number squares in bottom red banner 
+        self.bar_y_percent_start = 0.85  # Bottom 15% where position bar is located
+        self.bar_y_percent_end = 1.0     # Very bottom of frame
+        self.bar_x_percent_start = 0.0   # Full width to capture all position rectangles
+        self.bar_x_percent_end = 1.0     # Full width
         
     def read_position_bar(self, frame: np.ndarray, frame_num: int = 0, fps: float = 30.0) -> Optional[PositionBarSnapshot]:
         """
@@ -49,8 +49,13 @@ class PositionBarReader:
         if bar_region.size == 0:
             return None
         
-        # Try multiple preprocessing methods for colored numbers
-        detected_numbers = self._detect_numbers_in_bar(bar_region)
+        # IMPROVED: Try to detect individual colored squares first
+        # The position bar consists of colored squares with numbers
+        detected_numbers = self._detect_numbers_with_segmentation(bar_region)
+        
+        # Fallback to original method if segmentation fails
+        if not detected_numbers or len(detected_numbers) < 2:
+            detected_numbers = self._detect_numbers_in_bar(bar_region)
         
         if not detected_numbers:
             return None
@@ -82,6 +87,122 @@ class PositionBarReader:
         
         return snapshot
     
+    def _detect_numbers_with_segmentation(self, bar_region: np.ndarray) -> List[Tuple[int, float, float]]:
+        """
+        Improved detection using manual position locations discovered through debugging.
+        Position bar consists of 8 colored squares in the red banner.
+        """
+        detected = []
+        height, width = bar_region.shape[:2]
+        
+        # Manual position locations discovered through visual debugging
+        # These are precise locations relative to the bottom 15% region
+        manual_positions = [
+            (50, 18, 22, 16),   # Position 1 
+            (105, 18, 22, 16),  # Position 2
+            (160, 18, 22, 16),  # Position 3  
+            (215, 18, 22, 16),  # Position 4
+            (270, 18, 22, 16),  # Position 5
+            (325, 18, 22, 16),  # Position 6
+            (380, 18, 22, 16),  # Position 7
+            (435, 18, 22, 16),  # Position 8
+        ]
+        
+        # Scale positions to match actual region size (since manual positions assume ~734 width, 73 height)
+        expected_width = 734
+        expected_height = 73
+        
+        width_scale = width / expected_width
+        height_scale = height / expected_height
+        
+        for i, (x_manual, y_manual, w_manual, h_manual) in enumerate(manual_positions):
+            if i >= self.expected_horses:  # Only process expected number of horses
+                break
+                
+            # Scale the manual positions to current region size
+            x = int(x_manual * width_scale)
+            y = int(y_manual * height_scale)
+            w = int(w_manual * width_scale)
+            h = int(h_manual * height_scale)
+            
+            # Ensure bounds are valid
+            x = max(0, min(x, width - w))
+            y = max(0, min(y, height - h))
+            
+            # Extract this position rectangle
+            square_region = bar_region[y:y+h, x:x+w]
+            
+            if square_region.size == 0:
+                continue
+            
+            # Try OCR on this specific position with multiple preprocessing
+            best_result = None
+            best_confidence = 0
+            
+            for method_name, processed_img in self._preprocess_single_square(square_region):
+                try:
+                    results = self.reader.readtext(
+                        processed_img, 
+                        allowlist='12345678', 
+                        paragraph=False,
+                        width_ths=0.001,  # Ultra-low thresholds for small digits
+                        height_ths=0.001,
+                        detail=1
+                    )
+                    for bbox, text, confidence in results:
+                        text = text.strip()
+                        if len(text) == 1 and text.isdigit():
+                            number = int(text)
+                            if 1 <= number <= self.expected_horses and confidence > best_confidence:
+                                best_result = number
+                                best_confidence = confidence
+                                logger.debug(f"Manual position {i+1}: {number} (conf: {confidence:.3f}, method: {method_name})")
+                                break
+                except:
+                    continue
+            
+            if best_result:
+                x_center = x + w/2
+                detected.append((best_result, x_center, best_confidence))
+        
+        return detected
+    
+    def _preprocess_single_square(self, square: np.ndarray) -> List[Tuple[str, np.ndarray]]:
+        """Preprocess a single colored square for OCR with proven techniques"""
+        processed = []
+        
+        # Massive upscaling first (10x for tiny digits)
+        scale = 10
+        upscaled = cv2.resize(square, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+        
+        # Apply sharpening to upscaled
+        kernel_sharpen = np.array([[-1,-1,-1], [-1, 9,-1], [-1,-1,-1]])
+        sharpened = cv2.filter2D(upscaled, -1, kernel_sharpen)
+        
+        # Convert to grayscale for processing
+        gray = cv2.cvtColor(sharpened, cv2.COLOR_BGR2GRAY)
+        
+        # Original upscaled color
+        processed.append(("upscaled_color", sharpened))
+        
+        # PROVEN METHOD: Adaptive threshold on inverted with morphological closing
+        inverted = cv2.bitwise_not(gray)
+        adaptive_inv = cv2.adaptiveThreshold(inverted, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+        kernel = np.ones((3,3), np.uint8)
+        adaptive_inv_closed = cv2.morphologyEx(adaptive_inv, cv2.MORPH_CLOSE, kernel)
+        processed.append(("adaptive_inv_closed", adaptive_inv_closed))  # This method works!
+        
+        # White text extraction with multiple thresholds  
+        for thresh in [180, 200, 220]:
+            _, white_thresh = cv2.threshold(gray, thresh, 255, cv2.THRESH_BINARY)
+            processed.append((f"white_{thresh}", white_thresh))
+        
+        # Otsu on inverted
+        _, otsu_inv = cv2.threshold(inverted, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        processed.append(("otsu_inv", otsu_inv))
+        
+        return processed
+    
     def _detect_numbers_in_bar(self, bar_region: np.ndarray) -> List[Tuple[int, float, float]]:
         """
         Detect numbers in the position bar.
@@ -105,7 +226,7 @@ class PositionBarReader:
                     numbers_found = re.findall(r'\d+', text)
                     for num_str in numbers_found:
                         number = int(num_str)
-                        if 1 <= number <= 20:  # Support up to 20 horses
+                        if 1 <= number <= self.expected_horses:  # Only valid horse numbers for this race
                                 # Get x-coordinate from bounding box
                                 x_center = (bbox[0][0] + bbox[2][0]) / 2
                                 
@@ -116,7 +237,7 @@ class PositionBarReader:
                                         duplicate = True
                                         break
                                 
-                                if not duplicate:
+                                if not duplicate and confidence > 0.3:  # Higher confidence threshold
                                     detected.append((number, x_center, confidence))
                                     logger.debug(f"Detected {number} at x={x_center:.0f} using {method_name} (conf: {confidence:.2f})")
                 
@@ -133,39 +254,56 @@ class PositionBarReader:
         return list(unique_numbers.values())
     
     def _preprocess_for_colored_numbers(self, bar_region: np.ndarray) -> List[Tuple[str, np.ndarray]]:
-        """Preprocess the bar region to extract colored numbers"""
+        """Preprocess the bar region to extract colored numbers - IMPROVED"""
         processed = []
+        height, width = bar_region.shape[:2]
         
-        # Original color image
+        # 1. Original color image first (works sometimes)
         processed.append(("original", bar_region))
         
-        # Convert to grayscale
+        # 2. Convert to grayscale with proper weighting
         gray = cv2.cvtColor(bar_region, cv2.COLOR_BGR2GRAY)
         
-        # Extract individual color channels (colored numbers might stand out in one channel)
-        b, g, r = cv2.split(bar_region)
-        processed.append(("blue_channel", b))
-        processed.append(("green_channel", g))
-        processed.append(("red_channel", r))
-        
-        # HSV value channel (good for bright colored text)
+        # 3. HSV processing - colored squares have distinct hue/saturation
         hsv = cv2.cvtColor(bar_region, cv2.COLOR_BGR2HSV)
-        _, _, v = cv2.split(hsv)
-        processed.append(("value_channel", v))
+        h, s, v = cv2.split(hsv)
         
-        # High contrast version
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        # High saturation areas (colored squares)
+        _, sat_thresh = cv2.threshold(s, 50, 255, cv2.THRESH_BINARY)
+        processed.append(("saturation", sat_thresh))
+        
+        # Value channel with better threshold
+        _, val_thresh = cv2.threshold(v, 150, 255, cv2.THRESH_BINARY)
+        processed.append(("value_thresh", val_thresh))
+        
+        # 4. Individual color channels with OTSU thresholding
+        b, g, r = cv2.split(bar_region)
+        _, b_otsu = cv2.threshold(b, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        _, g_otsu = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        _, r_otsu = cv2.threshold(r, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        processed.append(("blue_otsu", b_otsu))
+        processed.append(("green_otsu", g_otsu))
+        processed.append(("red_otsu", r_otsu))
+        
+        # 5. Enhanced contrast
+        clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(4, 4))
         enhanced = clahe.apply(gray)
         processed.append(("enhanced", enhanced))
         
-        # Threshold for bright colors
-        _, bright_thresh = cv2.threshold(v, 180, 255, cv2.THRESH_BINARY)
-        processed.append(("bright_threshold", bright_thresh))
+        # 6. Edge detection (numbers have strong edges)
+        edges = cv2.Canny(enhanced, 50, 150)
+        kernel = np.ones((2,2), np.uint8)
+        edges = cv2.dilate(edges, kernel, iterations=1)
+        processed.append(("edges", edges))
         
-        # Adaptive threshold
-        adaptive = cv2.adaptiveThreshold(enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                        cv2.THRESH_BINARY, 11, 2)
-        processed.append(("adaptive", adaptive))
+        # 7. Inverted (sometimes white text on colored background)
+        inv_gray = cv2.bitwise_not(gray)
+        processed.append(("inverted", inv_gray))
+        
+        # 8. Morphological cleaning
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+        morph = cv2.morphologyEx(val_thresh, cv2.MORPH_CLOSE, kernel)
+        processed.append(("morphological", morph))
         
         return processed
     
@@ -181,7 +319,11 @@ class PositionBarReader:
         if not all(1 <= p <= self.expected_horses for p in positions):
             return False
         
-        # Allow some duplicates since OCR may misread, but prefer unique readings
+        # Check for too many duplicates (indicates OCR error)
+        unique_positions = len(set(positions))
+        if unique_positions < len(positions) * 0.7:  # Less than 70% unique is suspicious
+            return False
+        
         return True
 
 
@@ -238,19 +380,31 @@ class RacePositionTracker:
         # Get starting positions
         start_snapshot = self.position_history[0]
         
-        # Get finishing positions - prioritize readings close to race end
-        # Position bar disappears around 162s (2:42), so look for readings between 140-165s
+        # IMPROVED: Focus on final stretch for accurate finish positions
+        # Look for readings in the last 20% of the race (final stretch)
+        total_frames = self.position_history[-1].frame_num
+        final_stretch_start = int(total_frames * 0.8)
         
-        # First try: use readings from the very end (most recent)
-        recent_readings = self.position_history[-5:] if len(self.position_history) >= 5 else self.position_history
+        # Get all readings from final stretch
+        final_stretch_readings = [s for s in self.position_history 
+                                 if s.frame_num >= final_stretch_start]
         
-        # Find the most complete recent reading
-        if recent_readings:
-            end_snapshot = max(recent_readings, key=lambda s: len(s.positions))
-            logger.info(f"Using end snapshot from frame {end_snapshot.frame_num} with positions: {end_snapshot.positions}")
+        # Find the most complete reading from final stretch
+        if final_stretch_readings:
+            # Prefer readings with most horses detected
+            end_snapshot = max(final_stretch_readings, 
+                             key=lambda s: (len(s.positions), s.confidence))
+            logger.info(f"Using final stretch snapshot from frame {end_snapshot.frame_num} "
+                       f"with positions: {end_snapshot.positions} (conf: {end_snapshot.confidence:.2f})")
         else:
-            end_snapshot = self.position_history[-1]
-            logger.info(f"Using final snapshot from frame {end_snapshot.frame_num} with positions: {end_snapshot.positions}")
+            # Fallback to last 10 readings
+            recent_readings = self.position_history[-10:] if len(self.position_history) >= 10 else self.position_history
+            if recent_readings:
+                end_snapshot = max(recent_readings, key=lambda s: len(s.positions))
+                logger.info(f"Using recent snapshot from frame {end_snapshot.frame_num} with positions: {end_snapshot.positions}")
+            else:
+                end_snapshot = self.position_history[-1]
+                logger.info(f"Using final snapshot from frame {end_snapshot.frame_num} with positions: {end_snapshot.positions}")
         
         # Track each horse's journey
         horse_journeys = {}
